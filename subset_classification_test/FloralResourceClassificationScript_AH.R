@@ -17,8 +17,9 @@ gc() # free up memory and report memory usage
 
 
 # set working directory. This will be the directory where all the unzipped files are located
-setwd("F:/subset_test_data/subset_classification/")
-
+#setwd("F:/subset_test_data/subset_classification/")
+library(here)
+here()
 # load required libraries (Note: if these packages are not installed, then install them first and then load)
 # rgdal: a comprehansive repository for handling spatial data
 # raster: for the manipulation of raster data
@@ -48,20 +49,52 @@ library(randomForest)
 library(kernlab)
 library(e1071)
 library(pacman)
+library(mapview)
+library(terra)
+library(sf)
+library(exactextractr)
 
 
 # Load the raster stack of the study area
-s2data = stack("composite.tif")
+s2data = stack(here("subset_classification_test/composite.tif"))
 
 # Name the layers of the Sentinel-2 stack based on previously saved information
-names(s2data) = as.character(read.csv("stack_names.csv")[,1])
+names(s2data) = as.character(read.csv("subset_classification_test/stack_names.csv")[,1])
 
+# Reading in the orthophoto as a terra object
+orthofoto<-rast(here("subset_classification_test/ortho.tif")) # terra object
+# Read in the training polygons as terra object
+training.vect<- vect(here("subset_classification_test//train.shp"))
+
+
+viewRGB(s2data, r=1, g=2, b=3)
 # Load the sample data
 # Alternatively, you can use the supplied orthophotos to generate a new set of training and validation data 
 # Your samples layer must have a column for each image in the raster stack, a column for the land cover class that point represents, an X and Y column
 # You can create such a sample file using QGIS or another GIS software
-samples = read.csv("training_samples.csv")
+samples = read.csv("subset_classification_test/training_samples.csv")
 
+# Extract ALL pixels that intersect the training polygons
+# This needs to be updated to reflect the X,Y coordinates for each pixel
+pixel.val<-terra::extract(x=orthofoto, y=training.vect, cells=TRUE, xy=TRUE)
+
+########
+# extract values into data frame
+ortho.raster<-raster::stack(here("subset_classification_test/ortho.tif")) # raster object
+training.polys<- st_read(here("subset_classification_test/train.shp"))
+training.polys$Id<-row.names(training.polys)
+
+# Using exact extract to extract XY --- not sure why we'd need it
+prec_dfs <- exact_extract(ortho.raster, training.polys, include_xy=TRUE, include_cols=c('Id','class'))
+tbl <- do.call(rbind, prec_dfs)
+
+
+#ex.df <- as.data.frame(extract(ortho.raster,training.polys,cellnumbers=T))
+
+# create coordinate columns using xyFromCell
+#ex.df.coords <- cbind(ex.df, xyFromCell(s,ex.df[,1]))
+
+#######
 # Split the data frame into 70-30 by class
 trainx = list(0)
 evalx = list(0)
