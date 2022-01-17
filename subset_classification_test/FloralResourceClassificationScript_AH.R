@@ -30,15 +30,6 @@ here()
 # kernlab: Support Vector Machines
 # e1071: provides miscellaneous functions requiered by the caret package
 
-#install.packages("rgdal")
-#install.packages("raster")
-#install.packages("caret")
-#install.packages("sp")
-#install.packages("nnet")
-#install.packages("randomForest")
-#install.packages("kernlab")
-#install.packages("e1071")
-#install.packages("pacman"); pacman::p_load(rgdal,raster,caret,sp,nnet,randomForest,kernlab,e1071)
 
 library(rgdal)
 library(raster)
