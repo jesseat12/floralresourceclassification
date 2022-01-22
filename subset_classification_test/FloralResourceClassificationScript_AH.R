@@ -31,6 +31,10 @@ here()
 # e1071: provides miscellaneous functions requiered by the caret package
 
 
+
+#### Load required packages
+### Pay attention to how functions are called throughout the script - because some functions have the 
+### same name across different packages. Functions are superseded or masked as packages are loaded
 library(rgdal)
 library(raster)
 library(caret)
@@ -45,20 +49,73 @@ library(terra)
 library(sf)
 library(exactextractr)
 
-
-# Load the raster stack of the study area
-s2data = stack(here("subset_classification_test/composite.tif"))
-
-# Name the layers of the Sentinel-2 stack based on previously saved information
-names(s2data) = as.character(read.csv("subset_classification_test/stack_names.csv")[,1])
-
+######## Data Exploration and preliminary geoprocessing
+# Read in the training polygons 
+training.vect<- vect(here("subset_classification_test//training_samples.shp")) # as Terra object
+training.polys<- st_read(here("subset_classification_test/training_samples.shp")) # as SF object
+training.polys$Id<-row.names(training.polys)
 # Reading in the orthophoto as a terra object
-orthofoto<-rast(here("subset_classification_test/ortho.tif")) # terra object
-# Read in the training polygons as terra object
-training.vect<- vect(here("subset_classification_test//train.shp"))
+ortho.foto.terra<-rast(here("subset_classification_test/ortho.tif")) # terra object
+
+# Reading in the DSM  as a terra object
+DSM.terra<-rast(here("subset_classification_test/dsm.tif")) # terra object
+
+# Reading in the DTM  as a terra object
+DTM.terra<-rast(here("subset_classification_test/dtm.tif")) # terra object
+# Select only the RGB bands and resample the orthophoto to the DSM spatial resolution
+Ortho.foto.res<- resample(terra::subset(ortho.foto.terra, 1:3),DSM.terra, method = "near")
+names(Ortho.foto.res)<-c("Red","Green","Blue")
+### Plotting
+#par(mfrow = c(1,2))
+#plotRGB(Ortho.foto.res, axes=TRUE, stretch="lin", main="Ortho Color Composite")
+#plotRGB(ortho.foto.terra, axes=TRUE, stretch="lin", main="Original Ortho Color Composite")
+
+#### Compute VIs
+# EBI
+
+EBI <- function(img, r,g,b) {
+  br <- img[[r]]
+  bg <- img[[g]]
+  bb <- img[[b]]
+  bright<-br+bg+bb
+  gss<-((bg/bb)*(br-bb+255))
+  vi <- bright / gss
+  return(vi)
+}
+
+Ortho.EBI<-EBI(Ortho.foto.res, 1,2,3)
+names(Ortho.EBI)<-c("EBI")
+plot(Ortho.EBI, col=rev(terrain.colors(10)), main = "Ortho-EBI")
+
+# view histogram of EBI
+hist(Ortho.EBI,
+     main = "Distribution of EBI values",
+     xlab = "EBI",
+     ylab= "Frequency",
+     col = "wheat",
+     xlim = c(-0.1, 2.3),
+     breaks = 30,
+     xaxt = 'n')
+## Warning in .hist1(x, maxcell = maxcell, main = main, plot = plot, ...): 54%
+## of the raster cells were used.
+axis(side=1, at = seq(-0.1,2.3, 0.05), labels = seq(-0.1,2.33, 0.05))
 
 
-viewRGB(s2data, r=1, g=2, b=3)
+mapview(as(Ortho.EBI,"Raster"))+mapview(training.polys,zcol="class_name")
+
+writeRaster(Ortho.EBI, filename="Ortho_EBI_temp01.tif", overwrite=TRUE)
+# Adding the DSM and DTM to the Ortho
+
+Composite<-c(Ortho.foto.res, DSM.terra, DTM.terra, Ortho.EBI)
+
+# Extract pixel values using exact extract
+prec_dfs <- exact_extract(Composite, training.polys, include_xy=TRUE, include_cols=c('Id','class_name','class'))
+tbl <- do.call(rbind, prec_dfs)
+
+
+boxplot(EBI~class_name,data=tbl, main="EBI distribution per class",
+        xlab="Classes", ylab="EBI values")
+
 # Load the sample data
 # Alternatively, you can use the supplied orthophotos to generate a new set of training and validation data 
 # Your samples layer must have a column for each image in the raster stack, a column for the land cover class that point represents, an X and Y column
@@ -67,17 +124,11 @@ samples = read.csv("subset_classification_test/training_samples.csv")
 
 # Extract ALL pixels that intersect the training polygons
 # This needs to be updated to reflect the X,Y coordinates for each pixel
-pixel.val<-terra::extract(x=orthofoto, y=training.vect, cells=TRUE, xy=TRUE)
+pixel.val<-data.frame(training.vect$class_name, terra::extract(x=Composite, y=training.vect, cells=TRUE, xy=TRUE))
 
-########
-# extract values into data frame
-ortho.raster<-raster::stack(here("subset_classification_test/ortho.tif")) # raster object
-training.polys<- st_read(here("subset_classification_test/train.shp"))
-training.polys$Id<-row.names(training.polys)
 
-# Using exact extract to extract XY --- not sure why we'd need it
-prec_dfs <- exact_extract(ortho.raster, training.polys, include_xy=TRUE, include_cols=c('Id','class'))
-tbl <- do.call(rbind, prec_dfs)
+
+
 
 
 #ex.df <- as.data.frame(extract(ortho.raster,training.polys,cellnumbers=T))
