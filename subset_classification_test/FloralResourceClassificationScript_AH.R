@@ -70,7 +70,9 @@ names(Ortho.foto.res)<-c("Red","Green","Blue")
 #plotRGB(Ortho.foto.res, axes=TRUE, stretch="lin", main="Ortho Color Composite")
 #plotRGB(ortho.foto.terra, axes=TRUE, stretch="lin", main="Original Ortho Color Composite")
 
-#### Compute VIs
+
+#######################################################
+#### Prepare functions to compute VIs
 # EBI
 
 EBI <- function(img, r,g,b) {
@@ -83,7 +85,12 @@ EBI <- function(img, r,g,b) {
   return(vi)
 }
 
-Ortho.EBI<-EBI(Ortho.foto.res, 1,2,3)
+
+#######################################################
+### Apply the indices #####
+Ortho.EBI.orig<-EBI(ortho.foto.terra, 1,2,3) # on the original image
+Ortho.EBI<-EBI(Ortho.foto.res, 1,2,3) # on the resampled image
+
 names(Ortho.EBI)<-c("EBI")
 plot(Ortho.EBI, col=rev(terrain.colors(10)), main = "Ortho-EBI")
 
@@ -110,11 +117,24 @@ Composite<-c(Ortho.foto.res, DSM.terra, DTM.terra, Ortho.EBI)
 
 # Extract pixel values using exact extract
 prec_dfs <- exact_extract(Composite, training.polys, include_xy=TRUE, include_cols=c('Id','class_name','class'))
-tbl <- do.call(rbind, prec_dfs)
+tbl <- do.call(rbind, prec_dfs) # convert the previous list object to a dataframe
+
+# Get the plant / features height
+tbl$height<-abs(tbl$dsm-tbl$dtm)
+
+# Extract pixel values only for the original EBI
+prec_dfs.orig <- exact_extract(Ortho.EBI.orig, training.polys, include_xy=TRUE, include_cols=c('Id','class_name','class'))
+tbl.orig <- do.call(rbind, prec_dfs.orig)
 
 
-boxplot(EBI~class_name,data=tbl, main="EBI distribution per class",
+# EBI distributions
+boxplot(value~class_name,data=tbl.orig, main="EBI distribution per class - original RGB",
         xlab="Classes", ylab="EBI values")
+
+# Height distributions
+boxplot(height~class_name,data=tbl, main="Height distribution per class",
+        xlab="Classes", ylab="Height (DSM - DTM)")
+
 
 # Load the sample data
 # Alternatively, you can use the supplied orthophotos to generate a new set of training and validation data 
