@@ -48,12 +48,23 @@ library(mapview)
 library(terra)
 library(sf)
 library(exactextractr)
+library(readxl)
+library(dplyr)
+library(ModelMap)
 
 ######## Data Exploration and preliminary geoprocessing
+
+
 # Read in the training polygons 
-training.vect<- vect(here("subset_classification_test//training_samples.shp")) # as Terra object
-training.polys<- st_read(here("subset_classification_test/training_samples.shp")) # as SF object
+training.vect<- vect(here("subset_classification_test//training_samples.shp")) # as Terra object 
+training.polys<- st_read(here("subset_classification_test/training_samples.shp")) # as SF object for later use with exactextract
+# Assign ID from row numbers
 training.polys$Id<-row.names(training.polys)
+
+# Read in the mask polygon to be used to clip/crop the orthophoto
+Mask.clip<-vect(here("subset_classification_test//mask2clip.shp")) # as Terra
+Mask.poly<-st_read(here("subset_classification_test//mask2clip.shp")) # as SF
+
 # Reading in the orthophoto as a terra object
 ortho.foto.terra<-rast(here("subset_classification_test/ortho.tif")) # terra object
 
@@ -62,9 +73,14 @@ DSM.terra<-rast(here("subset_classification_test/dsm.tif")) # terra object
 
 # Reading in the DTM  as a terra object
 DTM.terra<-rast(here("subset_classification_test/dtm.tif")) # terra object
-# Select only the RGB bands and resample the orthophoto to the DSM spatial resolution
-Ortho.foto.res<- resample(terra::subset(ortho.foto.terra, 1:3),DSM.terra, method = "near")
-names(Ortho.foto.res)<-c("Red","Green","Blue")
+# Select only the RGB bands, resample the orthophoto to the DSM spatial resolution, and then clip/crop
+# the orthophoto using the mask
+Ortho.foto.res<- terra::mask(resample(terra::subset(ortho.foto.terra, 1:3),DSM.terra, method = "near"),Mask.clip)
+names(Ortho.foto.res)<-c("Red","Green","Blue") # rename the 3 channels / bands
+# Do the same with the DSM + DTM before they are merged into one multi-band object
+DSM.terra.crop<-terra::mask(DSM.terra, Mask.clip)
+DTM.terra.crop<-terra::mask(DTM.terra, Mask.clip)
+
 ### Plotting
 #par(mfrow = c(1,2))
 #plotRGB(Ortho.foto.res, axes=TRUE, stretch="lin", main="Ortho Color Composite")
@@ -85,13 +101,59 @@ EBI <- function(img, r,g,b) {
   return(vi)
 }
 
+# VDVI
+VDVI<- function(img, r,g,b){
+  br <- img[[r]]
+  bg <- img[[g]]
+  bb <- img[[b]]
+  vi <-((2*bg-br-bb)/(2*bg+br+bb))
+  return(vi)
+}
+
+# VARI
+VARI<- function(img, r,g,b){
+  br <- img[[r]]
+  bg <- img[[g]]
+  bb <- img[[b]]
+  vi <-((bg-br)/(bg+br-bb))
+  return(vi)
+}
+
+# MGRVI
+
+MGRVI<- function(img, r,g,b){
+  br <- img[[r]]
+  bg <- img[[g]]
+  bb <- img[[b]]
+  vi <-((bg^2-br^2)/(bg^2+br^2))
+  return(vi)
+}
+
+# CIVE
+CIVE<- function(img, r,g,b){
+  br <- img[[r]]
+  bg <- img[[g]]
+  bb <- img[[b]]
+  vi <-(0.441*br - 0.881*bg + 0.385*bb + 18.787)
+  return(vi)
+}
+
 
 #######################################################
 ### Apply the indices #####
-Ortho.EBI.orig<-EBI(ortho.foto.terra, 1,2,3) # on the original image
+#Ortho.EBI.orig<-EBI(ortho.foto.terra, 1,2,3) # on the original image
 Ortho.EBI<-EBI(Ortho.foto.res, 1,2,3) # on the resampled image
+names(Ortho.EBI)<-c("EBI") # rename the recently created VI 
+Ortho.CIVE<-CIVE(Ortho.foto.res, 1,2,3) # on the resampled image
+names(Ortho.CIVE)<-c("CIVE") # rename the recently created VI 
+Ortho.MGRVI<-MGRVI(Ortho.foto.res, 1,2,3) # on the resampled image
+names(Ortho.MGRVI)<-c("MGRVI") # rename the recently created VI 
+Ortho.VARI<-VARI(Ortho.foto.res, 1,2,3) # on the resampled image
+names(Ortho.VARI)<-c("VARI") # rename the recently created VI 
+Ortho.VDVI<-VDVI(Ortho.foto.res, 1,2,3) # on the resampled image
+names(Ortho.VDVI)<-c("VDVI") # rename the recently created VI 
+#######################################################
 
-names(Ortho.EBI)<-c("EBI")
 plot(Ortho.EBI, col=rev(terrain.colors(10)), main = "Ortho-EBI")
 
 # view histogram of EBI
@@ -113,7 +175,8 @@ mapview(as(Ortho.EBI,"Raster"))+mapview(training.polys,zcol="class_name")
 writeRaster(Ortho.EBI, filename="Ortho_EBI_temp01.tif", overwrite=TRUE)
 # Adding the DSM and DTM to the Ortho
 
-Composite<-c(Ortho.foto.res, DSM.terra, DTM.terra, Ortho.EBI)
+Composite<-c(Ortho.foto.res, DSM.terra.crop, DTM.terra.crop, Ortho.EBI,Ortho.CIVE,
+             Ortho.MGRVI, Ortho.VARI, Ortho.VDVI)
 
 # Extract pixel values using exact extract
 prec_dfs <- exact_extract(Composite, training.polys, include_xy=TRUE, include_cols=c('Id','class_name','class'))
@@ -122,10 +185,11 @@ tbl <- do.call(rbind, prec_dfs) # convert the previous list object to a datafram
 # Get the plant / features height
 tbl$height<-abs(tbl$dsm-tbl$dtm)
 
+#######################################################
 # Extract pixel values only for the original EBI
 prec_dfs.orig <- exact_extract(Ortho.EBI.orig, training.polys, include_xy=TRUE, include_cols=c('Id','class_name','class'))
 tbl.orig <- do.call(rbind, prec_dfs.orig)
-
+#######################################################
 
 # EBI distributions
 boxplot(value~class_name,data=tbl.orig, main="EBI distribution per class - original RGB",
