@@ -51,6 +51,7 @@ library(exactextractr)
 library(readxl)
 library(dplyr)
 library(ModelMap)
+library(RColorBrewer)
 
 ######## Data Exploration and preliminary geoprocessing
 
@@ -173,9 +174,10 @@ axis(side=1, at = seq(-0.1,2.3, 0.05), labels = seq(-0.1,2.33, 0.05))
 mapview(as(Ortho.EBI,"Raster"))+mapview(training.polys,zcol="class_name")
 
 writeRaster(Ortho.EBI, filename="Ortho_EBI_temp01.tif", overwrite=TRUE)
-# Adding the DSM and DTM to the Ortho
-
-Composite<-c(Ortho.foto.res, DSM.terra.crop, DTM.terra.crop, Ortho.EBI,Ortho.CIVE,
+# Adding the DSM and DTM height and Vegetation Indices to the Ortho
+height<-DSM.terra.crop-DTM.terra.crop
+names(height)<-c("height") # rename the recently created VI 
+Composite<-c(Ortho.foto.res, DSM.terra.crop, DTM.terra.crop, height,Ortho.EBI,Ortho.CIVE,
              Ortho.MGRVI, Ortho.VARI, Ortho.VDVI)
 
 # Extract pixel values using exact extract
@@ -183,8 +185,12 @@ prec_dfs <- exact_extract(Composite, training.polys, include_xy=TRUE, include_co
 tbl <- do.call(rbind, prec_dfs) # convert the previous list object to a dataframe
 
 # Get the plant / features height
-tbl$height<-abs(tbl$dsm-tbl$dtm)
+#tbl$height<-abs(tbl$dsm-tbl$dtm)
 
+# A new dataset with just the variables we want to keep or rows... (i.e. filter out partial pixels)
+
+tbl.trim<-tbl[,c(3:6,9:14 )]
+tbl.trim$class<-as.factor(tbl.trim$class)
 #######################################################
 # Extract pixel values only for the original EBI
 prec_dfs.orig <- exact_extract(Ortho.EBI.orig, training.polys, include_xy=TRUE, include_cols=c('Id','class_name','class'))
@@ -198,6 +204,81 @@ boxplot(value~class_name,data=tbl.orig, main="EBI distribution per class - origi
 # Height distributions
 boxplot(height~class_name,data=tbl, main="Height distribution per class",
         xlab="Classes", ylab="Height (DSM - DTM)")
+
+
+######################################################
+### Fit a RandomForest Classifier
+
+set.seed(123) # Run this before the sampling so that it's reproducible or do not run it if you want different results each time
+split1<- sample(c(rep(1, 0.7 * nrow(tbl.trim)), rep(0, 0.3 * nrow(tbl.trim)))) # Create a vector to split into training ==1 and test ==0
+table(split1)
+tbl.train <- tbl.trim[split1 == 1, ]
+tbl.test <-  tbl.trim[split1 == 0, ]
+summary(as.factor(tbl$class))
+summary(as.factor(tbl.train$class))
+summary(as.factor(tbl.test$class))
+
+#### Optimization
+mtry <- tuneRF(tbl.trim[-1],tbl.trim$class, ntreeTry=500,
+               stepFactor=1.5,improve=0.01, trace=TRUE, plot=TRUE)
+best.m <- mtry[mtry[, 2] == min(mtry[, 2]), 1]
+print(mtry)
+print(best.m)
+
+set.seed(71)
+rf <-randomForest(class~.,data=tbl.train, mtry=best.m, importance=TRUE,ntree=500)
+print(rf)
+#Evaluate variable importance
+importance(rf)
+varImpPlot(rf)
+
+# Evaluate other models now that we've assessed variable importance
+set.seed(71)
+rf.simple <-randomForest(class~height+VDVI+MGRVI+Red+EBI,data=tbl.train, mtry=best.m, importance=TRUE,ntree=500)
+# VDVI+MGRVI+Red+
+print(rf.simple)
+#Evaluate variable importance
+importance(rf.simple)
+varImpPlot(rf.simple)
+
+# Apply the fitted model to the test dataset
+prediction <-predict(rf.simple, tbl.test)
+# Assess the accuracy of our model on a test dataset
+confusionMatrix(prediction, tbl.test$class)
+
+
+# Spatial prediction
+Rast.Predict <- predict(Composite, rf.simple, type='response')
+
+# Custom palette
+my_palette <- brewer.pal(n = 6, name = "Dark2")
+my_palette
+
+
+# Plot
+mapView(as(Rast.Predict, "Raster"), col.regions = my_palette)+mapview(as(Ortho.foto.res,"Raster"))
+raster::spplot(Rast.Predict)
+
+
+writeRaster(Rast.Predict, filename="Prediction_Test01312022.tif", overwrite=TRUE)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # Load the sample data
