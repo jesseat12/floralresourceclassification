@@ -52,6 +52,8 @@ library(readxl)
 library(dplyr)
 library(ModelMap)
 library(RColorBrewer)
+library(imager)
+library(GLCMTextures)
 
 ######## Data Exploration and preliminary geoprocessing
 
@@ -175,10 +177,13 @@ mapview(as(Ortho.EBI,"Raster"))+mapview(training.polys,zcol="class_name")
 
 writeRaster(Ortho.EBI, filename="Ortho_EBI_temp01.tif", overwrite=TRUE)
 # Adding the DSM and DTM height and Vegetation Indices to the Ortho
-height<-DSM.terra.crop-DTM.terra.crop
+height<-abs(DSM.terra.crop-DTM.terra.crop) # raster with absolute values
 names(height)<-c("height") # rename the recently created VI 
+
+
 Composite<-c(Ortho.foto.res, DSM.terra.crop, DTM.terra.crop, height,Ortho.EBI,Ortho.CIVE,
-             Ortho.MGRVI, Ortho.VARI, Ortho.VDVI)
+             Ortho.MGRVI, Ortho.VARI, Ortho.VDVI, Ortho.textures)
+
 
 # Extract pixel values using exact extract
 prec_dfs <- exact_extract(Composite, training.polys, include_xy=TRUE, include_cols=c('Id','class_name','class'))
@@ -189,21 +194,24 @@ tbl <- do.call(rbind, prec_dfs) # convert the previous list object to a datafram
 
 # A new dataset with just the variables we want to keep or rows... (i.e. filter out partial pixels)
 
-tbl.trim<-tbl[,c(3:6,9:14 )]
+tbl.trim<-tbl[,c(3:6,9:22 )]
 tbl.trim$class<-as.factor(tbl.trim$class)
+
+tbl.trim <- tbl.trim[complete.cases(tbl.trim), ]
+
 #######################################################
 # Extract pixel values only for the original EBI
-prec_dfs.orig <- exact_extract(Ortho.EBI.orig, training.polys, include_xy=TRUE, include_cols=c('Id','class_name','class'))
-tbl.orig <- do.call(rbind, prec_dfs.orig)
+#prec_dfs.orig <- exact_extract(Ortho.EBI.orig, training.polys, include_xy=TRUE, include_cols=c('Id','class_name','class'))
+#tbl.orig <- do.call(rbind, prec_dfs.orig)
 #######################################################
 
 # EBI distributions
-boxplot(value~class_name,data=tbl.orig, main="EBI distribution per class - original RGB",
-        xlab="Classes", ylab="EBI values")
+#boxplot(value~class_name,data=tbl.orig, main="EBI distribution per class - original RGB",
+#        xlab="Classes", ylab="EBI values")
 
 # Height distributions
-boxplot(height~class_name,data=tbl, main="Height distribution per class",
-        xlab="Classes", ylab="Height (DSM - DTM)")
+#boxplot(height~class_name,data=tbl, main="Height distribution per class",
+#        xlab="Classes", ylab="Height (DSM - DTM)")
 
 
 ######################################################
@@ -243,12 +251,13 @@ varImpPlot(rf.simple)
 
 # Apply the fitted model to the test dataset
 prediction <-predict(rf.simple, tbl.test)
+prediction <-predict(rf, tbl.test)
 # Assess the accuracy of our model on a test dataset
 confusionMatrix(prediction, tbl.test$class)
 
 
 # Spatial prediction
-Rast.Predict <- predict(Composite, rf.simple, type='response')
+Rast.Predict <- predict(Composite, rf, type='response')
 
 # Custom palette
 my_palette <- brewer.pal(n = 6, name = "Dark2")
@@ -260,13 +269,25 @@ mapView(as(Rast.Predict, "Raster"), col.regions = my_palette)+mapview(as(Ortho.f
 raster::spplot(Rast.Predict)
 
 
-writeRaster(Rast.Predict, filename="Prediction_Test01312022.tif", overwrite=TRUE)
+writeRaster(Rast.Predict, filename="Prediction_Test02022022.tif", overwrite=TRUE)
+
+########### Texture-based predictors
+
+Ortho.foto.res2<- Ortho.foto.res
+terra::RGB(Ortho.foto.res2) <- 1:3
+
+RGB.gray<-terra::colorize(Ortho.foto.res2, to="col", grays= FALSE)
+
+# Start the clock!
+ptm <- proc.time()
+Ortho.textures<- glcm_textures(RGB.gray, w = c(3,5), n_levels = 32, quantization = "equal prob", shift=c(1,0)) 
+names(Ortho.textures)<-c("contrast","dissimilar","homogeneity","ASM",
+                         "entropy", "mean", "variance","correlation")
+# Stop the clock
+proc.time() - ptm
 
 
-
-
-
-
+plot(Ortho.textures)
 
 
 
