@@ -1,2 +1,2 @@
 # floralresourceclassification
-Floral resource classification in R
+The data product supports the following research of Tabor JA, Koch JB, Hernandez A.
